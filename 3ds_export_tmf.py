@@ -17,12 +17,12 @@
 # ##### END GPL LICENSE BLOCK #####
 
 bl_info = {
-    "name": "Export 3DS for TrackMania Forever",
-    "author": "Glauco Bacchi, Campbell Barton, Bob Holcomb, Richard Lärkäng, Damien McGinnes, Mark Stijnman, Sergey Savkin",
-    "version": (1, 0, 5),
+    "name": "Export 3DS for TrackMania",
+    "author": "Glauco Bacchi, Campbell Barton, Bob Holcomb, Richard Lärkäng, Damien McGinnes, Mark Stijnman, Sergey Savkin, GreffMASTER",
+    "version": (1, 0, 6),
     "blender": (2, 81, 0),
-    "location": "File > Export > 3DS for TMF (.3ds)",
-    "description": "Export 3DS model for TrackMania Forever (.3ds)",
+    "location": "File > Export > 3DS for TM (.3ds)",
+    "description": "Export 3DS model for TrackMania (.3ds) Greffs Fork",
     "warning": "",
     "wiki_url": "",
     "category": "Import-Export"
@@ -36,11 +36,15 @@ import math
 import mathutils
 import bmesh
 
+from bpy_extras.io_utils import (
+    axis_conversion
+)
+
 ###### EXPORT OPERATOR #######
-class Export_tmf(bpy.types.Operator, bpy_extras.io_utils.ExportHelper):
-    """Export 3DS model for Trackmania Forever"""
-    bl_idname = "export_scene.tmf"
-    bl_label = "Export 3DS for TMF (.3ds)"
+class Export_tm(bpy.types.Operator, bpy_extras.io_utils.ExportHelper):
+    """Export 3DS model for TrackMania"""
+    bl_idname = "export_scene.tm"
+    bl_label = "Export 3DS for TM (.3ds)"
 
     filename_ext = ".3ds"
     filter_glob : bpy.props.StringProperty(
@@ -77,15 +81,15 @@ class Export_tmf(bpy.types.Operator, bpy_extras.io_utils.ExportHelper):
 ### REGISTER ###
 
 def menu_func(self, context):
-    self.layout.operator(Export_tmf.bl_idname, text="3DS for TMF (.3ds)")
+    self.layout.operator(Export_tm.bl_idname, text="3DS for TMF (.3ds)")
 
 
 def register():
-    bpy.utils.register_class(Export_tmf)
+    bpy.utils.register_class(Export_tm)
     bpy.types.TOPBAR_MT_file_export.append(menu_func)
 
 def unregister():
-    bpy.utils.unregister_class(Export_tmf)
+    bpy.utils.unregister_class(Export_tm)
     bpy.types.TOPBAR_MT_file_export.remove(menu_func)
 
 ######################################################
@@ -149,6 +153,8 @@ OBJECT_MATERIAL         = 0x4130  # This is found if the object has a material, 
 OBJECT_UV               = 0x4140  # The UV texture coordinates
 OBJECT_SMOOTH           = 0x4150  # Smooth group
 OBJECT_TRANS_MATRIX     = 0x4160  # The Object Matrix
+# Custom
+OBJECT_VERTEX_COLORS    = 0x4115  # The objects vertex colors
 
 #>------ sub defines of KFDATA
 KFDATA_KFHDR            = 0xB00A
@@ -869,6 +875,12 @@ def make_vert_chunk(vert_array):
     vert_chunk.add_variable("vertices", vert_array)
     return vert_chunk
 
+def make_vert_color_chunk(color_array):
+    """Make a vertex color chunk out of an array of colors."""
+    color_chunk = _3ds_chunk(OBJECT_VERTEX_COLORS)
+    color_chunk.add_variable("vertex colors", color_array)
+    return color_chunk
+
 def make_uv_chunk(uv_array):
     """Make a UV chunk out of an array of UVs."""
     uv_chunk = _3ds_chunk(OBJECT_UV)
@@ -898,16 +910,36 @@ def make_mesh_chunk(mesh, materialDict, ob, name_to_id, name_to_scale, name_to_p
         #     # no UV at all:
         uv_array = None
 
+    color_layer = None
+    color_array = None
+
     # create the chunk:
     mesh_chunk = _3ds_chunk(OBJECT_MESH)
 
     # add vertex chunk:
     mesh_chunk.add_subchunk(make_vert_chunk(vert_array))
+
+    print('CHECKING FOR COLORS')
+    for layer in mesh.color_attributes:
+        color_layer = layer
+        print('GOT COLOR!')
+        break
+
+    if color_layer:
+        color_array = _3ds_array()
+        for color in color_layer.data:
+            rgb_tuple = (color.color[0], color.color[1], color.color[2])
+            vert_color = _3ds_rgb_color(rgb_tuple)
+            color_array.add(vert_color)
+        # add vertex colors chunk
+        print('ADDING COLOR')
+        mesh_chunk.add_subchunk(make_vert_color_chunk(color_array))
+
     # add faces chunk:
 
     mesh_chunk.add_subchunk(make_faces_chunk(tri_list, mesh, materialDict))
 
-    mesh1 = _3ds_chunk(OBJECT_TRANS_MATRIX);
+    mesh1 = _3ds_chunk(OBJECT_TRANS_MATRIX)
 
     # 4KEX: 3DS mesh matrix. Apply the worldspace scale and positioning relative to the parent (if any).
     if (ob.parent == None) or (ob.parent.name not in name_to_id):
@@ -1124,6 +1156,11 @@ def do_export(filename,use_selection=False):
 
     """Save the Blender scene to a 3ds file."""
 
+    global_matrix = axis_conversion(
+        to_forward='-Z',
+        to_up='Y',
+    ).to_4x4()
+
     sce = bpy.context.scene
 
     # Initialize the main chunk (primary):
@@ -1163,6 +1200,8 @@ def do_export(filename,use_selection=False):
         for ob_derived, mat in derived:
             if ob.type not in {'MESH', 'CURVE', 'SURFACE', 'FONT', 'META'}:
                 continue
+
+            # ob_derived.matrix_world = global_matrix
 
             try:
                 data = ob_derived.to_mesh()
