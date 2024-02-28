@@ -19,7 +19,7 @@
 bl_info = {
     "name": "Export 3DS for TrackMania",
     "author": "Glauco Bacchi, Campbell Barton, Bob Holcomb, Richard Lärkäng, Damien McGinnes, Mark Stijnman, Sergey Savkin, GreffMASTER",
-    "version": (1, 0, 7),
+    "version": (1, 0, 8),
     "blender": (2, 81, 0),
     "location": "File > Export > 3DS for TM (.3ds)",
     "description": "Export 3DS model for TrackMania (.3ds) Greffs Fork",
@@ -156,6 +156,7 @@ OBJECT_TRANS_MATRIX     = 0x4160  # The Object Matrix
 
 # Custom (breaks 3ds format compatibility)
 OBJECT_VERTEX_COLORS    = 0x4115  # The objects vertex colors
+OBJECT_UV_LIST          = 0x4145  # The UV texture coordinates list
 
 #>------ sub defines of KFDATA
 KFDATA_KFHDR            = 0xB00A
@@ -669,7 +670,7 @@ class tri_wrapper(object):
         self.offset = [0, 0, 0]  # offset indices
         self.group = group
 
-def extract_triangles(mesh):
+def extract_triangles(mesh, uv_layer = None):
     '''Extract triangles from a mesh.
 
     If the mesh contains quads, they will be split into triangles.'''
@@ -692,7 +693,7 @@ def extract_triangles(mesh):
     '''
 
     tri_list = []
-    do_uv = mesh.uv_layers
+    do_uv = uv_layer
     if not do_uv:
         face_uv = None
 
@@ -700,7 +701,7 @@ def extract_triangles(mesh):
     for i, face in enumerate(mesh.loop_triangles):
         f_v = face.vertices
 
-        uf = mesh.uv_layers.active.data if do_uv else None
+        uf = uv_layer.data if do_uv else None
 
         if do_uv:
             f_uv = [uf[l].uv for l in face.loops]
@@ -776,16 +777,17 @@ def remove_face_uv(verts, tri_list, color_attrib = None):
         index_list.append(vert_index)
 
         pt = _3ds_point_3d(vert.co)  # reuse, should be ok
-        color = color_layer.data[i]
-        rgb_tuple = (color.color[0], color.color[1], color.color[2])
-        vert_color = _3ds_rgb_color(rgb_tuple)
+        if color_layer:
+            color = color_layer.data[i]
+            rgb_tuple = (color.color[0], color.color[1], color.color[2])
+            vert_color = _3ds_rgb_color(rgb_tuple)
         
 
         uvmap = [None] * len(unique_uvs[i])
         for ii, uv_3ds in unique_uvs[i].values():
             # add a vertex duplicate to the vertex_array for every uv associated with this vertex:
             vert_array.add(pt)
-            color_array.add(vert_color)
+            if color_layer: color_array.add(vert_color)
             
             # add the uv coordinate to the uv array:
             # This for loop does not give uv's ordered by ii, so we create a new map
@@ -904,17 +906,33 @@ def make_uv_chunk(uv_array):
     uv_chunk.add_variable("uv coords", uv_array)
     return uv_chunk
 
+def make_uv_list_chunk(uv_list):
+    """Make a UV chunk out of multiple arrays of UVs."""
+    uvl_chunk = _3ds_chunk(OBJECT_UV_LIST)
+    uvl_chunk.add_variable("num uvs", _3ds_ushort(len(uv_list)))
+    for uv_array in uv_list:
+        uvl_chunk.add_variable("uv coords", uv_array)
+    return uvl_chunk
+
 def make_mesh_chunk(mesh, materialDict, ob, name_to_id, name_to_scale, name_to_pos, name_to_rot):
     '''Make a chunk out of a Blender mesh.'''
 
     # Extract the triangles from the mesh:
-    tri_list = extract_triangles(mesh)
+    tri_list = extract_triangles(mesh, mesh.uv_layers.active)
 
     color_array = None
+    uv_list: list = []
 
     if mesh.uv_layers:
         # Remove the face UVs and convert it to vertex UV:
         vert_array, uv_array, tri_list, color_array = remove_face_uv(mesh.vertices, tri_list, mesh.color_attributes)
+
+        # Make the uv list
+        for uv_layer in mesh.uv_layers:
+            uv_tri_list = extract_triangles(mesh, uv_layer)
+            _, uv_array, _, _ = remove_face_uv(mesh.vertices, uv_tri_list, mesh.color_attributes)
+            uv_list.append(uv_array)
+
     else:
         # Add the vertices to the vertex array:
         vert_array = _3ds_array()
@@ -1022,6 +1040,9 @@ def make_mesh_chunk(mesh, materialDict, ob, name_to_id, name_to_scale, name_to_p
     # if available, add uv chunk:
     if uv_array:
         mesh_chunk.add_subchunk(make_uv_chunk(uv_array))
+
+    if len(uv_list) > 0:
+        mesh_chunk.add_subchunk(make_uv_list_chunk(uv_list))
 
     return mesh_chunk
 
