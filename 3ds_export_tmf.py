@@ -19,7 +19,7 @@
 bl_info = {
     "name": "Export 3DS for TrackMania",
     "author": "Glauco Bacchi, Campbell Barton, Bob Holcomb, Richard Lärkäng, Damien McGinnes, Mark Stijnman, Sergey Savkin, GreffMASTER",
-    "version": (1, 0, 8),
+    "version": (1, 0, 9),
     "blender": (2, 81, 0),
     "location": "File > Export > 3DS for TM (.3ds)",
     "description": "Export 3DS model for TrackMania (.3ds) Greffs Fork",
@@ -810,6 +810,71 @@ def remove_face_uv(verts, tri_list, color_attrib = None):
 
     return vert_array, uv_array, tri_list, color_array
 
+def remove_face_only_uv(verts, tri_list):
+
+    # initialize a list of UniqueLists, one per vertex:
+    #uv_list = [UniqueList() for i in xrange(len(verts))]
+    unique_uvs = [{} for i in range(len(verts))]
+
+    # for each face uv coordinate, add it to the UniqueList of the vertex
+    for tri in tri_list:
+        for i in range(3):
+            # store the index into the UniqueList for future reference:
+            # offset.append(uv_list[tri.vertex_index[i]].add(_3ds_point_uv(tri.faceuvs[i])))
+
+            context_uv_vert = unique_uvs[tri.vertex_index[i]]
+            uvkey = tri.faceuvs[i]
+
+            offset_index__uv_3ds = context_uv_vert.get(uvkey)
+
+            if not offset_index__uv_3ds:
+                offset_index__uv_3ds = context_uv_vert[uvkey] = len(context_uv_vert), _3ds_point_uv(uvkey)
+
+            tri.offset[i] = offset_index__uv_3ds[0]
+
+    # At this point, each vertex has a UniqueList containing every uv coordinate that is associated with it
+    # only once.
+
+    # Now we need to duplicate every vertex as many times as it has uv coordinates and make sure the
+    # faces refer to the new face indices:
+    vert_index = 0
+    vert_array = _3ds_array()
+    uv_array = _3ds_array()
+    color_array = _3ds_array()
+    index_list = []
+
+    for i, vert in enumerate(verts):
+        index_list.append(vert_index)
+
+        pt = _3ds_point_3d(vert.co)  # reuse, should be ok
+        
+
+        uvmap = [None] * len(unique_uvs[i])
+        for ii, uv_3ds in unique_uvs[i].values():
+            # add a vertex duplicate to the vertex_array for every uv associated with this vertex:
+            vert_array.add(pt)
+            
+            # add the uv coordinate to the uv array:
+            # This for loop does not give uv's ordered by ii, so we create a new map
+            # and add the uv's later
+            # uv_array.add(uv_3ds)
+            uvmap[ii] = uv_3ds
+
+        # Add the uv's in the correct order
+        for uv_3ds in uvmap:
+            # add the uv coordinate to the uv array:
+            uv_array.add(uv_3ds)
+
+        vert_index += len(unique_uvs[i])
+
+    # Make sure the triangle vertex indices now refer to the new vertex list:
+    for tri in tri_list:
+        for i in range(3):
+            tri.offset[i] += index_list[tri.vertex_index[i]]
+        tri.vertex_index = tri.offset
+
+    return uv_array
+
 def make_faces_chunk(tri_list, mesh, materialDict):
     """Make a chunk for the faces.
 
@@ -926,12 +991,14 @@ def make_mesh_chunk(mesh, materialDict, ob, name_to_id, name_to_scale, name_to_p
     if mesh.uv_layers:
         # Remove the face UVs and convert it to vertex UV:
         vert_array, uv_array, tri_list, color_array = remove_face_uv(mesh.vertices, tri_list, mesh.color_attributes)
+        print(len(uv_array.values))
 
         # Make the uv list
         for uv_layer in mesh.uv_layers:
             uv_tri_list = extract_triangles(mesh, uv_layer)
-            _, uv_array, _, _ = remove_face_uv(mesh.vertices, uv_tri_list, mesh.color_attributes)
-            uv_list.append(uv_array)
+            new_uv_array = remove_face_only_uv(mesh.vertices, uv_tri_list)
+            print(len(new_uv_array.values))
+            uv_list.append(new_uv_array)
 
     else:
         # Add the vertices to the vertex array:
