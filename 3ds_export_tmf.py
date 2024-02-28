@@ -19,7 +19,7 @@
 bl_info = {
     "name": "Export 3DS for TrackMania",
     "author": "Glauco Bacchi, Campbell Barton, Bob Holcomb, Richard Lärkäng, Damien McGinnes, Mark Stijnman, Sergey Savkin, GreffMASTER",
-    "version": (1, 0, 6),
+    "version": (1, 0, 7),
     "blender": (2, 81, 0),
     "location": "File > Export > 3DS for TM (.3ds)",
     "description": "Export 3DS model for TrackMania (.3ds) Greffs Fork",
@@ -153,7 +153,8 @@ OBJECT_MATERIAL         = 0x4130  # This is found if the object has a material, 
 OBJECT_UV               = 0x4140  # The UV texture coordinates
 OBJECT_SMOOTH           = 0x4150  # Smooth group
 OBJECT_TRANS_MATRIX     = 0x4160  # The Object Matrix
-# Custom
+
+# Custom (breaks 3ds format compatibility)
 OBJECT_VERTEX_COLORS    = 0x4115  # The objects vertex colors
 
 #>------ sub defines of KFDATA
@@ -726,7 +727,7 @@ def extract_triangles(mesh):
     '''
     return tri_list
 
-def remove_face_uv(verts, tri_list):
+def remove_face_uv(verts, tri_list, color_attrib = None):
     """Remove face UV coordinates from a list of triangles.
 
     Since 3ds files only support one pair of uv coordinates for each vertex, face uv coordinates
@@ -761,15 +762,31 @@ def remove_face_uv(verts, tri_list):
     vert_index = 0
     vert_array = _3ds_array()
     uv_array = _3ds_array()
+    color_array = _3ds_array()
     index_list = []
+    color_layer = None
+
+    if color_attrib:
+        for layer in color_attrib:
+            color_layer = layer
+            print('GOT COLOR! (in remove_face_uv)')
+            break
+
     for i, vert in enumerate(verts):
         index_list.append(vert_index)
 
         pt = _3ds_point_3d(vert.co)  # reuse, should be ok
+        color = color_layer.data[i]
+        rgb_tuple = (color.color[0], color.color[1], color.color[2])
+        vert_color = _3ds_rgb_color(rgb_tuple)
+        
+
         uvmap = [None] * len(unique_uvs[i])
         for ii, uv_3ds in unique_uvs[i].values():
             # add a vertex duplicate to the vertex_array for every uv associated with this vertex:
             vert_array.add(pt)
+            color_array.add(vert_color)
+            
             # add the uv coordinate to the uv array:
             # This for loop does not give uv's ordered by ii, so we create a new map
             # and add the uv's later
@@ -789,7 +806,7 @@ def remove_face_uv(verts, tri_list):
             tri.offset[i] += index_list[tri.vertex_index[i]]
         tri.vertex_index = tri.offset
 
-    return vert_array, uv_array, tri_list
+    return vert_array, uv_array, tri_list, color_array
 
 def make_faces_chunk(tri_list, mesh, materialDict):
     """Make a chunk for the faces.
@@ -893,12 +910,15 @@ def make_mesh_chunk(mesh, materialDict, ob, name_to_id, name_to_scale, name_to_p
     # Extract the triangles from the mesh:
     tri_list = extract_triangles(mesh)
 
+    color_array = None
+
     if mesh.uv_layers:
         # Remove the face UVs and convert it to vertex UV:
-        vert_array, uv_array, tri_list = remove_face_uv(mesh.vertices, tri_list)
+        vert_array, uv_array, tri_list, color_array = remove_face_uv(mesh.vertices, tri_list, mesh.color_attributes)
     else:
         # Add the vertices to the vertex array:
         vert_array = _3ds_array()
+        print(f'vert cnt: {len(mesh.vertices)}')
         for vert in mesh.vertices:
             vert_array.add(_3ds_point_3d(vert.co))
         # If the mesh has vertex UVs, create an array of UVs:
@@ -911,7 +931,6 @@ def make_mesh_chunk(mesh, materialDict, ob, name_to_id, name_to_scale, name_to_p
         uv_array = None
 
     color_layer = None
-    color_array = None
 
     # create the chunk:
     mesh_chunk = _3ds_chunk(OBJECT_MESH)
@@ -920,19 +939,22 @@ def make_mesh_chunk(mesh, materialDict, ob, name_to_id, name_to_scale, name_to_p
     mesh_chunk.add_subchunk(make_vert_chunk(vert_array))
 
     print('CHECKING FOR COLORS')
-    for layer in mesh.color_attributes:
-        color_layer = layer
-        print('GOT COLOR!')
-        break
+    if not color_array:
+        for layer in mesh.color_attributes:
+            color_layer = layer
+            print('GOT COLOR!')
+            break
 
-    if color_layer:
-        color_array = _3ds_array()
-        for color in color_layer.data:
-            rgb_tuple = (color.color[0], color.color[1], color.color[2])
-            vert_color = _3ds_rgb_color(rgb_tuple)
-            color_array.add(vert_color)
-        # add vertex colors chunk
-        print('ADDING COLOR')
+        if color_layer:
+            color_array = _3ds_array()
+            print(f'color cnt: {len(color_layer.data)}')
+            for color in color_layer.data:
+                rgb_tuple = (color.color[0], color.color[1], color.color[2])
+                vert_color = _3ds_rgb_color(rgb_tuple)
+                color_array.add(vert_color)
+            # add vertex colors chunk
+            mesh_chunk.add_subchunk(make_vert_color_chunk(color_array))
+    else:
         mesh_chunk.add_subchunk(make_vert_color_chunk(color_array))
 
     # add faces chunk:
