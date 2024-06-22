@@ -19,7 +19,7 @@
 bl_info = {
     "name": "Export 3DS for TrackMania",
     "author": "Glauco Bacchi, Campbell Barton, Bob Holcomb, Richard Lärkäng, Damien McGinnes, Mark Stijnman, Sergey Savkin, GreffMASTER",
-    "version": (1, 0, 9),
+    "version": (1, 1, 0),
     "blender": (2, 81, 0),
     "location": "File > Export > 3DS for TM (.3ds)",
     "description": "Export 3DS model for TrackMania (.3ds) Greffs Fork",
@@ -155,6 +155,7 @@ OBJECT_SMOOTH           = 0x4150  # Smooth group
 OBJECT_TRANS_MATRIX     = 0x4160  # The Object Matrix
 
 # Custom (breaks 3ds format compatibility)
+OBJECT_VERTEX_NORMALS   = 0x4112  # The objects vertex normals
 OBJECT_VERTEX_COLORS    = 0x4115  # The objects vertex colors
 OBJECT_UV_LIST          = 0x4145  # The UV texture coordinates list
 
@@ -764,6 +765,7 @@ def remove_face_uv(verts, tri_list, color_attrib = None):
     vert_array = _3ds_array()
     uv_array = _3ds_array()
     color_array = _3ds_array()
+    normal_array = _3ds_array()
     index_list = []
     color_layer = None
 
@@ -777,6 +779,7 @@ def remove_face_uv(verts, tri_list, color_attrib = None):
         index_list.append(vert_index)
 
         pt = _3ds_point_3d(vert.co)  # reuse, should be ok
+        nt = _3ds_point_3d(vert.normal)  # reuse (again), should be ok
         if color_layer:
             color = color_layer.data[i]
             rgb_tuple = (color.color[0], color.color[1], color.color[2])
@@ -787,6 +790,7 @@ def remove_face_uv(verts, tri_list, color_attrib = None):
         for ii, uv_3ds in unique_uvs[i].values():
             # add a vertex duplicate to the vertex_array for every uv associated with this vertex:
             vert_array.add(pt)
+            normal_array.add(nt)
             if color_layer: color_array.add(vert_color)
             
             # add the uv coordinate to the uv array:
@@ -808,7 +812,7 @@ def remove_face_uv(verts, tri_list, color_attrib = None):
             tri.offset[i] += index_list[tri.vertex_index[i]]
         tri.vertex_index = tri.offset
 
-    return vert_array, uv_array, tri_list, color_array
+    return vert_array, uv_array, tri_list, color_array, normal_array
 
 def remove_face_only_uv(verts, tri_list):
 
@@ -959,6 +963,12 @@ def make_vert_chunk(vert_array):
     vert_chunk.add_variable("vertices", vert_array)
     return vert_chunk
 
+def make_vert_normals_chunk(norm_array):
+    """Make a vertex color chunk out of an array of colors."""
+    norm_chunk = _3ds_chunk(OBJECT_VERTEX_NORMALS)
+    norm_chunk.add_variable("vertex normals", norm_array)
+    return norm_chunk
+
 def make_vert_color_chunk(color_array):
     """Make a vertex color chunk out of an array of colors."""
     color_chunk = _3ds_chunk(OBJECT_VERTEX_COLORS)
@@ -986,11 +996,12 @@ def make_mesh_chunk(mesh, materialDict, ob, name_to_id, name_to_scale, name_to_p
     tri_list = extract_triangles(mesh, mesh.uv_layers.active)
 
     color_array = None
+    normal_array = None
     uv_list: list = []
 
     if mesh.uv_layers:
         # Remove the face UVs and convert it to vertex UV:
-        vert_array, uv_array, tri_list, color_array = remove_face_uv(mesh.vertices, tri_list, mesh.color_attributes)
+        vert_array, uv_array, tri_list, color_array, normal_array = remove_face_uv(mesh.vertices, tri_list, mesh.color_attributes)
         print(len(uv_array.values))
 
         # Make the uv list
@@ -1022,6 +1033,10 @@ def make_mesh_chunk(mesh, materialDict, ob, name_to_id, name_to_scale, name_to_p
 
     # add vertex chunk:
     mesh_chunk.add_subchunk(make_vert_chunk(vert_array))
+
+    # add vertex normals chunk:
+    if normal_array:
+        mesh_chunk.add_subchunk((make_vert_normals_chunk(normal_array)))
 
     print('CHECKING FOR COLORS')
     if not color_array:
