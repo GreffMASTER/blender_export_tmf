@@ -17,12 +17,12 @@
 # ##### END GPL LICENSE BLOCK #####
 
 bl_info = {
-    "name": "Export 3DS for TrackMania",
+    "name": "Export 3DS for TrackMania (for 3ds2gbxml)",
     "author": "Glauco Bacchi, Campbell Barton, Bob Holcomb, Richard Lärkäng, Damien McGinnes, Mark Stijnman, Sergey Savkin, GreffMASTER",
-    "version": (1, 1, 0),
+    "version": (1, 1, 1),
     "blender": (2, 81, 0),
-    "location": "File > Export > 3DS for TM (.3ds)",
-    "description": "Export 3DS model for TrackMania (.3ds) Greffs Fork",
+    "location": "File > Export > 3DS for TM (for 3ds2gbxml) (.3ds)",
+    "description": "Export 3DS model for TrackMania (for 3ds2gbxml) (.3ds)",
     "warning": "",
     "wiki_url": "",
     "category": "Import-Export"
@@ -40,11 +40,17 @@ from bpy_extras.io_utils import (
     axis_conversion
 )
 
+# Export settings
+p_do_no_name_limit: bool = True
+p_do_normals: bool = True
+p_do_colors: bool = True
+p_do_uvs: bool = True
+
 ###### EXPORT OPERATOR #######
 class Export_tm(bpy.types.Operator, bpy_extras.io_utils.ExportHelper):
     """Export 3DS model for TrackMania"""
     bl_idname = "export_scene.tm"
-    bl_label = "Export 3DS for TM (.3ds)"
+    bl_label = "Export 3DS for TM (for 3ds2gbxml) (.3ds)"
 
     filename_ext = ".3ds"
     filter_glob : bpy.props.StringProperty(
@@ -57,13 +63,46 @@ class Export_tm(bpy.types.Operator, bpy_extras.io_utils.ExportHelper):
         description="Export selected objects only",
         default=False,
         )
+    
+    remove_char_limit : bpy.props.BoolProperty(
+        name="Remove Name Limit",
+        description="Remove default 12 character name limit (breaks compatibility)",
+        default=True,
+        )
+    
+    export_normals : bpy.props.BoolProperty(
+        name="Vertex Normals",
+        description="Export Vertex Normals (breaks compatibility)",
+        default=True,
+        )
+    
+    export_colors : bpy.props.BoolProperty(
+        name="Vertex Colors",
+        description="Export Vertex Colors (breaks compatibility)",
+        default=True,
+        )
+    
+    more_uvs : bpy.props.BoolProperty(
+        name="All UV Layers",
+        description="Export all UV layers (breaks compatibility)",
+        default=True,
+        )
 
     def execute(self, context):
+        global p_do_no_name_limit
+        global p_do_normals
+        global p_do_colors
+        global p_do_uvs
 
         keywords = self.as_keywords()
-
         start_time = time.time()
         print('\n_____START_____')
+
+        p_do_no_name_limit = keywords['remove_char_limit']
+        p_do_normals = keywords['export_normals']
+        p_do_colors = keywords['export_colors']
+        p_do_uvs = keywords['more_uvs']
+
         props = self.properties
         filepath = self.filepath
         filepath = bpy.path.ensure_ext(filepath, self.filename_ext)
@@ -186,9 +225,12 @@ def sane_name(name):
     name_fixed = name_mapping.get(name)
     if name_fixed is not None:
         return name_fixed
-
+    
     # strip non ascii chars
-    new_name_clean = new_name = name.encode("ASCII", "replace").decode("ASCII")[:12]
+    if p_do_no_name_limit:
+        new_name_clean = new_name = name.encode("ASCII", "replace").decode("ASCII")
+    else:
+        new_name_clean = new_name = name.encode("ASCII", "replace").decode("ASCII")[:12]
     i = 0
 
     while new_name in name_unique:
@@ -1004,12 +1046,13 @@ def make_mesh_chunk(mesh, materialDict, ob, name_to_id, name_to_scale, name_to_p
         vert_array, uv_array, tri_list, color_array, normal_array = remove_face_uv(mesh.vertices, tri_list, mesh.color_attributes)
         print(len(uv_array.values))
 
-        # Make the uv list
-        for uv_layer in mesh.uv_layers:
-            uv_tri_list = extract_triangles(mesh, uv_layer)
-            new_uv_array = remove_face_only_uv(mesh.vertices, uv_tri_list)
-            print(len(new_uv_array.values))
-            uv_list.append(new_uv_array)
+        if p_do_uvs:
+            # Make the uv list
+            for uv_layer in mesh.uv_layers:
+                uv_tri_list = extract_triangles(mesh, uv_layer)
+                new_uv_array = remove_face_only_uv(mesh.vertices, uv_tri_list)
+                print(len(new_uv_array.values))
+                uv_list.append(new_uv_array)
 
     else:
         # Add the vertices to the vertex array:
@@ -1034,28 +1077,30 @@ def make_mesh_chunk(mesh, materialDict, ob, name_to_id, name_to_scale, name_to_p
     # add vertex chunk:
     mesh_chunk.add_subchunk(make_vert_chunk(vert_array))
 
-    # add vertex normals chunk:
-    if normal_array:
-        mesh_chunk.add_subchunk((make_vert_normals_chunk(normal_array)))
+    if p_do_normals:
+        # add vertex normals chunk:
+        if normal_array:
+            mesh_chunk.add_subchunk((make_vert_normals_chunk(normal_array)))
 
-    print('CHECKING FOR COLORS')
-    if not color_array:
-        for layer in mesh.color_attributes:
-            color_layer = layer
-            print('GOT COLOR!')
-            break
+    if p_do_colors:
+        print('CHECKING FOR COLORS')
+        if not color_array:
+            for layer in mesh.color_attributes:
+                color_layer = layer
+                print('GOT COLOR!')
+                break
 
-        if color_layer:
-            color_array = _3ds_array()
-            print(f'color cnt: {len(color_layer.data)}')
-            for color in color_layer.data:
-                rgb_tuple = (color.color[0], color.color[1], color.color[2])
-                vert_color = _3ds_rgb_color(rgb_tuple)
-                color_array.add(vert_color)
-            # add vertex colors chunk
+            if color_layer:
+                color_array = _3ds_array()
+                print(f'color cnt: {len(color_layer.data)}')
+                for color in color_layer.data:
+                    rgb_tuple = (color.color[0], color.color[1], color.color[2])
+                    vert_color = _3ds_rgb_color(rgb_tuple)
+                    color_array.add(vert_color)
+                # add vertex colors chunk
+                mesh_chunk.add_subchunk(make_vert_color_chunk(color_array))
+        else:
             mesh_chunk.add_subchunk(make_vert_color_chunk(color_array))
-    else:
-        mesh_chunk.add_subchunk(make_vert_color_chunk(color_array))
 
     # add faces chunk:
 
